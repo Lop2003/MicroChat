@@ -1,0 +1,12 @@
+flask
+pyngrok
+python-dotenv
+chromadb
+langchain
+langchain-community
+langchain-google-genai
+langchain-cohere
+cohere
+rank_bm25
+line-bot-sdk
+requests
