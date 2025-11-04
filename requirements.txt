@@ -1,5 +1,6 @@
+Cython
 flask
-# pyngrok
+pyngrok
 python-dotenv
 chromadb
 langchain
