@@ -24,7 +24,7 @@ NGROK_AUTHTOKEN = os.getenv('NGROK_AUTHTOKEN', "321Sf8mdH5pVmdJpwAGO25yrGY0_3Bh9
 # Imports
 # ================================================================
 from flask import Flask, request, abort
-from pyngrok import ngrok
+"""from pyngrok import ngrok"""
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -458,19 +458,17 @@ def handle_message(event):
 # Run server + Ngrok (unchanged)
 # ================================================================
 if __name__ == "__main__":
-    ngrok.set_auth_token(NGROK_AUTHTOKEN)
-
-    # Disconnect any existing tunnels
-    try:
-        tunnels = ngrok.get_tunnels()
-        for tunnel in tunnels:
-            ngrok.disconnect(tunnel.public_url)
-    except Exception as e:
-        print(f"Could not disconnect existing ngrok tunnels: {e}")
-
-    public_url = ngrok.connect(5000)
-    print("="*60)
-    print("🚀 Enhanced LINE Bot Online")
-    print(f"🔗 Webhook URL: {public_url.public_url}/callback")
-    print("="*60)
+    # ngrok integration is commented out for Render deploy
+    # ngrok.set_auth_token(NGROK_AUTHTOKEN)
+    # try:
+    #     tunnels = ngrok.get_tunnels()
+    #     for tunnel in tunnels:
+    #         ngrok.disconnect(tunnel.public_url)
+    # except Exception as e:
+    #     print(f"Could not disconnect existing ngrok tunnels: {e}")
+    # public_url = ngrok.connect(5000)
+    # print("="*60)
+    # print("🚀 Enhanced LINE Bot Online")
+    # print(f"🔗 Webhook URL: {public_url.public_url}/callback")
+    # print("="*60)
     app.run(port=5000, debug=False)

@@ -1,5 +1,5 @@
 flask
-pyngrok
+# pyngrok
 python-dotenv
 chromadb
 langchain
@@ -10,3 +10,4 @@ cohere
 rank_bm25
 line-bot-sdk
 requests
+gunicorn
