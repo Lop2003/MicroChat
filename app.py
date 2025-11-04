@@ -159,7 +159,7 @@ def preprocess_question(q: str, conversation_context: str = "") -> str:
 # ================================================================
 # Initialize Enhanced RAG chain
 # ================================================================
-def initialize_rag_chain(md_file: str = "newdata.md"):
+def initialize_rag_chain(md_file: str = "dataset.md"):
     print("⏳ Loading and indexing documents...")
     if not os.path.exists(md_file):
         raise FileNotFoundError(f"ไม่พบไฟล์ {md_file}")
@@ -342,7 +342,7 @@ app = Flask(__name__)
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-rag_chain_factory = initialize_rag_chain("newdata.md")
+rag_chain_factory = initialize_rag_chain("dataset.md")
 
 @app.route("/callback", methods=['POST'])
 def callback():

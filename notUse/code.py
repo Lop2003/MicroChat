@@ -1,6 +1,5 @@
-# ================================================================
-# Enhanced Microcontroller RAG + LINE Bot (Improved Retrieval)
-# ================================================================
+# This file is a copy of `code.py` but renamed to avoid shadowing the stdlib `code` module.
+# You can run `python app.py` instead of `python code.py` when using VS Code or a local env.
 
 import os
 from dotenv import load_dotenv
@@ -49,8 +48,74 @@ from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
-# Used to securely store your API key
-# Removed google.colab.userdata usage; secrets are loaded from environment (.env) via python-dotenv
+from collections import deque, defaultdict
+from datetime import datetime, timedelta
+
+# ================================================================
+# Memory Management for Context
+# ================================================================
+class ContextMemory:
+    """Manages conversation context and history for each user"""
+    
+    def __init__(self, max_history=10, cleanup_hours=24):
+        self.user_contexts = defaultdict(lambda: deque(maxlen=max_history))
+        self.last_activity = defaultdict(datetime.now)
+        self.max_history = max_history
+        self.cleanup_hours = cleanup_hours
+    
+    def add_conversation(self, user_id: str, question: str, answer: str):
+        """Add a Q&A pair to user's conversation history"""
+        self.user_contexts[user_id].append({
+            'question': question,
+            'answer': answer,
+            'timestamp': datetime.now()
+        })
+        self.last_activity[user_id] = datetime.now()
+    
+    def get_context_history(self, user_id: str, max_entries: int = 2) -> str:
+        """Get formatted conversation history for context"""
+        history = list(self.user_contexts[user_id])
+        if not history:
+            return ""
+        
+        # Get recent entries - reduce to 2 for less noise
+        recent_history = history[-max_entries:] if len(history) > max_entries else history
+        
+        # Only include context if it's actually relevant
+        context_parts = []
+        for i, conv in enumerate(recent_history, 1):
+            # Skip very simple responses to avoid confusion
+            if len(conv['answer']) < 50 or 'สวัสดี' in conv['answer'] or 'ยินดี' in conv['answer']:
+                continue
+                
+            context_parts.append(f"ก่อนหน้านี้ถาม: {conv['question']}")
+            context_parts.append(f"ได้รับคำตอบ: {conv['answer'][:150]}...")
+            context_parts.append("")
+        
+        if context_parts:
+            context_parts.insert(0, "บริบทการสนทนา:")
+            context_parts.insert(1, "")
+        
+        return "\n".join(context_parts)
+    
+    def cleanup_old_conversations(self):
+        """Remove old conversations to save memory"""
+        cutoff_time = datetime.now() - timedelta(hours=self.cleanup_hours)
+        
+        users_to_remove = []
+        for user_id, last_time in self.last_activity.items():
+            if last_time < cutoff_time:
+                users_to_remove.append(user_id)
+        
+        for user_id in users_to_remove:
+            del self.user_contexts[user_id]
+            del self.last_activity[user_id]
+        
+        if users_to_remove:
+            print(f"🧹 Cleaned up {len(users_to_remove)} inactive user contexts")
+
+# Initialize global memory manager
+memory_manager = ContextMemory(max_history=10, cleanup_hours=24)
 
 # ================================================================
 # Ensure rank_bm25 available
@@ -71,17 +136,35 @@ def _ensure_rank_bm25():
 # ================================================================
 def preprocess_question(q: str) -> str:
     """Enhanced query preprocessing for better retrieval"""
-    low = q.lower()
-
-    # Remove common question words that don't add search value
-    stop_words = ['คือ', 'อะไร', 'ไหม', 'หรือไม่', 'บ้าง', 'มี', 'สามารถ']
+    low = q.lower().strip()
+    
+    # Don't over-process very short queries
+    if len(q.strip()) <= 3:
+        return q
+    
+    # For single word queries, keep them simple but add relevant context
     words = q.split()
+    if len(words) == 1:
+        single_word_expansions = {
+            'char': 'char ตัวแปร ชนิดข้อมูล อักษร ไบต์',
+            'int': 'int ตัวแปร ชนิดข้อมูล จำนวนเต็ม',
+            'float': 'float ตัวแปร ชนิดข้อมูล ทศนิยม',
+            'string': 'string ตัวแปร ข้อความ อักขระ',
+            'led': 'LED ไฟ output อุปกรณ์',
+            'lcd': 'LCD จอแสดงผล output อุปกรณ์',
+            'sensor': 'sensor เซนเซอร์ input อุปกรณ์',
+        }
+        word_lower = words[0].lower()
+        if word_lower in single_word_expansions:
+            return f"{q} {single_word_expansions[word_lower]}"
+        return q
+
+    # Remove common question words that don't add search value - but be more conservative
+    stop_words = ['คือ', 'ไหม', 'หรือไม่', 'บ้าง']
     filtered_words = [w for w in words if w.lower() not in stop_words]
 
-    # Add domain-specific expansions
+    # Add domain-specific expansions for longer queries
     expansions = []
-
-    # Mapping for better retrieval - Enhanced for project question
     keyword_mapping = {
         r"(สอบปฏิบัติ|โครงงาน|การสอบ|project|assessment|ข้อกำหนด|เกณฑ์)": "โครงงานกลุ่มรายวิชา Microcontroller แบ่งกลุ่ม 5-6 คน เก็บคะแนน 20 คะแนน เกณฑ์การให้คะแนน ข้อกำหนด รายละเอียดโครงงาน พรีเซนต์ 30 นาที รายงาน 20 หน้า PDF",
         r"(ไม่มีพื้นฐาน|ขาดพื้นฐาน|พื้นฐานอิเล็กทรอนิกส์|ไม่มีความรู้)": "ไม่มีพื้นฐานอิเล็กทรอนิกส์ สามารถเรียน Microcontroller ได้หรือไม่ ผลกระทบของการขาดความรู้",
@@ -222,16 +305,19 @@ def initialize_rag_chain(md_file: str = "micro_rag_optimized.md"):
         google_api_key=GOOGLE_API_KEY
     )
 
-    # Improved prompt template
+    # Improved prompt template with conversation history
     template = """คุณคือผู้เชี่ยวชาญไมโครคอนโทรลเลอร์ ตอบคำถามโดยใช้เฉพาะข้อมูลจากเอกสาร
 
 กฎการตอบ:
-- ใช้เฉพาะข้อมูลจาก Context
+- ใช้เฉพาะข้อมูลจาก Context และ บริบทการสนทนา
 - ตอบตรงประเด็น กระชับ เข้าใจง่าย
+- อ้างอิงการสนทนาก่อนหน้าถ้าเกี่ยวข้อง
 - ห้ามใส่เครื่องหมาย * หรือ bullet points แบบ *
 - ห้ามเขียน "จากเอกสารที่ให้มา" หรือ "(ข้อมูลที่ X)"
 - ใช้รูปแบบย่อหน้าธรรมดา หรือขึ้นบรรทัดใหม่ด้วย - เท่านั้น
 - หากไม่พบข้อมูลให้ตอบ "ไม่พบข้อมูลในเอกสาร"
+
+{conversation_history}
 
 Context:
 {context}
@@ -258,10 +344,31 @@ Context:
                 formatted.append(content)
         return "\n\n".join(formatted[:10])  # Increase to 10 chunks for better coverage
 
+    def create_rag_chain_with_memory(user_id: str = "", use_memory: bool = True):
+        """Create RAG chain with optional conversation memory"""
+        conversation_history = ""
+        if use_memory and user_id:
+            conversation_history = memory_manager.get_context_history(user_id)
+        
+        chain = (
+            {
+                "context": retrieval,
+                "question": RunnablePassthrough(),
+                "conversation_history": lambda x: conversation_history
+            }
+            | RunnablePassthrough.assign(context=lambda x: format_docs(x["context"]))
+            | ANSWER_PROMPT
+            | llm
+            | StrOutputParser()
+        )
+        return chain
+
+    # Default chain without memory for backward compatibility
     rag_chain = (
         {
             "context": retrieval,
             "question": RunnablePassthrough(),
+            "conversation_history": lambda x: ""
         }
         | RunnablePassthrough.assign(context=lambda x: format_docs(x["context"]))
         | ANSWER_PROMPT
@@ -270,7 +377,7 @@ Context:
     )
 
     print("✅ Enhanced RAG Chain ready")
-    return rag_chain
+    return rag_chain, create_rag_chain_with_memory
 
 # ================================================================
 # LINE Bot + Flask (unchanged)
@@ -280,7 +387,7 @@ app = Flask(__name__)
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-rag_chain = initialize_rag_chain("micro_rag_optimized.md")
+rag_chain, create_rag_chain_with_memory = initialize_rag_chain("micro_rag_optimized.md")
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -328,16 +435,52 @@ def get_simple_response(question: str) -> str:
 
     return None
 
+def should_use_memory(question: str) -> bool:
+    """Determine if conversation memory should be used for this question"""
+    q_lower = question.lower().strip()
+    
+    # Don't use memory for very simple or single-word questions
+    if len(question.strip()) <= 3:
+        return False
+    
+    # Don't use memory for greetings and basic responses
+    if re.search(r'(สวัสดี|hello|hi|ขอบคุณ|thanks)', q_lower):
+        return False
+    
+    # Use memory for follow-up questions
+    follow_up_patterns = [
+        r'(แล้ว|ต่อไป|เพิ่มเติม|อีก|ยังไง|ที่บอก|เมื่อกี้|ก่อนหน้า)',
+        r'(มัน|อัน|ตัว|เจ้า).*นี้',
+        r'(งั้น|แล้ว).*',
+    ]
+    
+    for pattern in follow_up_patterns:
+        if re.search(pattern, q_lower):
+            return True
+    
+    # Use memory for technical questions that might benefit from context
+    if len(question.split()) >= 3:
+        return True
+        
+    return False
+
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     q_raw = event.message.text
+    user_id = event.source.user_id  # Get LINE user ID for memory management
+
+    # Periodic cleanup of old conversations
+    if len(memory_manager.user_contexts) > 50:  # Cleanup when too many users
+        memory_manager.cleanup_old_conversations()
 
     # Check for simple casual questions first
     simple_ans = get_simple_response(q_raw)
     if simple_ans:
         print(f"💬 Q: {q_raw} -> [Simple Response]")
         print(f"🤖 Ans: {simple_ans}")
+        # Still add to memory for context
+        memory_manager.add_conversation(user_id, q_raw, simple_ans)
         with ApiClient(configuration) as api_client:
             safe_reply(MessagingApi(api_client), event.reply_token, simple_ans)
         return
@@ -345,19 +488,52 @@ def handle_message(event):
     # Process with RAG for technical questions
     q_processed = preprocess_question(q_raw)
     print(f"💬 Q: {q_raw} -> {q_processed}")
+    
+    # Decide whether to use memory based on question type
+    use_memory = should_use_memory(q_raw)
+    
+    # Show conversation history for debugging
+    if use_memory:
+        history = memory_manager.get_context_history(user_id, max_entries=2)
+        if history:
+            print(f"📚 Using conversation history for user {user_id[:8]}...")
+        else:
+            use_memory = False
 
     try:
-        ans = rag_chain.invoke(q_processed)
-        # Additional fallback if no relevant answer found
-        if "ไม่พบข้อมูลในเอกสาร" in ans and len(q_raw) > 10:
-            # Try with original question
-            ans_fallback = rag_chain.invoke(q_raw)
-            if "ไม่พบข้อมูลในเอกสาร" not in ans_fallback:
-                ans = ans_fallback
+        # Try with memory first if applicable
+        if use_memory:
+            memory_chain = create_rag_chain_with_memory(user_id, use_memory=True)
+            ans = memory_chain.invoke(q_processed)
+        else:
+            # Use regular chain without memory
+            ans = rag_chain.invoke(q_processed)
+        
+        # Fallback strategies
+        if "ไม่พบข้อมูลในเอกสาร" in ans:
+            # Try without memory if memory was used
+            if use_memory:
+                print("🔄 Retrying without memory context...")
+                ans_fallback = rag_chain.invoke(q_processed)
+                if "ไม่พบข้อมูลในเอกสาร" not in ans_fallback:
+                    ans = ans_fallback
+            
+            # Try with original question if still no answer
+            if "ไม่พบข้อมูลในเอกสาร" in ans and q_processed != q_raw:
+                print("🔄 Retrying with original question...")
+                ans_original = rag_chain.invoke(q_raw)
+                if "ไม่พบข้อมูลในเอกสาร" not in ans_original:
+                    ans = ans_original
+                    
     except Exception as e:
         ans = f"เกิดข้อผิดพลาด: {e}"
 
+    # Add conversation to memory
+    memory_manager.add_conversation(user_id, q_raw, ans)
+    
     print(f"🤖 Ans: {ans}")
+    print(f"💾 Saved to memory for user {user_id[:8]}... (Total conversations: {len(memory_manager.user_contexts[user_id])})")
+    
     with ApiClient(configuration) as api_client:
         safe_reply(MessagingApi(api_client), event.reply_token, ans)
 
