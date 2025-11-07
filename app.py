@@ -458,17 +458,6 @@ def handle_message(event):
 # Run server + Ngrok (unchanged)
 # ================================================================
 if __name__ == "__main__":
-    # ngrok integration is commented out for Render deploy
-    # ngrok.set_auth_token(NGROK_AUTHTOKEN)
-    # try:
-    #     tunnels = ngrok.get_tunnels()
-    #     for tunnel in tunnels:
-    #         ngrok.disconnect(tunnel.public_url)
-    # except Exception as e:
-    #     print(f"Could not disconnect existing ngrok tunnels: {e}")
-    # public_url = ngrok.connect(5000)
-    # print("="*60)
-    # print("🚀 Enhanced LINE Bot Online")
-    # print(f"🔗 Webhook URL: {public_url.public_url}/callback")
-    # print("="*60)
-    app.run(port=5000, debug=False)
+    # รองรับ Google Cloud Run และทุก platform ที่กำหนด PORT ผ่าน env
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, debug=False)
